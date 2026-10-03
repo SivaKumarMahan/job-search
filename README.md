@@ -57,7 +57,7 @@ for Jobs.
 | Job sites | `allowed_sources` | LinkedIn and Naukri only (the Apply link opens that site) |
 | Roles | `allowed_titles` | Azure DevOps / DevOps, DevSecOps, Cloud Engineer, SRE, Platform Engineer, Cloud (Infrastructure) Architect, Kubernetes Administrator |
 | Date | `max_days_old` | Posted in the last 3 days |
-| Experience | `experience_filter.min_years` | Jobs asking for 5+ years (jobs that don't state it are kept) |
+| Experience | `experience_filter.my_years` | Your 5.6 years must fall inside the job's range (5+, 5-8, 3-6 kept; 2-4, 6+, 8-12 hidden). Jobs that don't state it are kept |
 | Skills | `min_skill_match` | At least 75% of the technologies the job mentions are yours |
 | Location | `locations`, `include_remote` | Hyderabad, plus remote |
 

@@ -35,12 +35,12 @@ allowed_titles:
   - "kubernetes administrator"
   - "kubernetes admin"
 
-# Experience the job asks for, read from the description ("5+ years", "6-10 years",
-# "minimum 5 years"). Jobs whose entry level is below min_years are hidden.
-# Postings use whole years, so 5 means "jobs for 5+ years of experience" (you have 5.6).
+# Experience the job asks for, read from the description ("5+ years", "5-8 years",
+# "minimum 5 years"). A job is kept only if your experience falls inside its range:
+#   5+, 4+, 5-8, 3-6 years -> kept      2-4, 6+, 8-12, 12+ years -> hidden
 experience_filter:
   enabled: true
-  min_years: 5
+  my_years: 5.6
   keep_not_stated: true    # keep jobs that do not mention years of experience
 
 # Locations (India). Used by Adzuna "where" and appended to JSearch queries.

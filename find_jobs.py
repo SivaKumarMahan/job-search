@@ -603,11 +603,14 @@ def main() -> int:
             others.append(j); continue
         j["score"], j["hits"] = res
         j["match_pct"], j["missing"] = skill_match(norm(j["title"]), norm(j["description"]), j["hits"], cfg)
-        min_years = float(exp_cfg.get("min_years", 0)) if exp_cfg.get("enabled", True) else 0
-        if exp and min_years and exp[0] < min_years:
-            j["reason"] = f"asks for {j['experience']} (below {min_years:g}+)"
+        my_years = float(exp_cfg.get("my_years", 0)) if exp_cfg.get("enabled", True) else 0
+        # keep the job only if your experience falls inside the range it asks for
+        too_senior = exp and my_years and exp[0] > my_years
+        too_junior = exp and my_years and exp[1] is not None and exp[1] < my_years
+        if too_senior or too_junior:
+            j["reason"] = f"asks for {j['experience']}, you have {my_years:g}"
             others.append(j)
-        elif not exp and min_years and not exp_cfg.get("keep_not_stated", True):
+        elif not exp and my_years and not exp_cfg.get("keep_not_stated", True):
             j["reason"] = "experience not stated"
             others.append(j)
         elif j["match_pct"] < cfg.get("min_skill_match", 0):

@@ -16,7 +16,9 @@ Optional:
 """
 from __future__ import annotations
 
+import csv
 import hashlib
+import html
 import json
 import os
 import re
@@ -30,6 +32,7 @@ import yaml
 ROOT = Path(__file__).parent
 SEEN_FILE = ROOT / "data" / "seen.json"
 REPORT_DIR = ROOT / "reports"
+EXPORT_DIR = ROOT / "out"          # uploaded as a workflow artifact, not committed
 SEEN_RETENTION_DAYS = 60
 TIMEOUT = 30
 # JSearch v5 moved job search from /search to /search-v2 ("Endpoint '/search' does not exist").
@@ -108,11 +111,32 @@ def fetch_jsearch(cfg: dict) -> list[dict]:
                     "url": j.get("job_apply_link") or j.get("job_google_link") or "",
                     "source": j.get("job_publisher") or "JSearch",
                     "posted": j.get("job_posted_at_datetime_utc") or "",
+                    "posted_ago": j.get("job_posted_at") or "",
+                    "employment_type": j.get("job_employment_type") or "",
+                    "salary": jsearch_salary(j),
+                    "google_link": j.get("job_google_link") or "",
+                    "also_on": ", ".join(sorted({o.get("publisher", "") for o in (j.get("apply_options") or [])
+                                                 if o.get("publisher")} - {j.get("job_publisher") or ""})),
                     "description": j.get("job_description") or "",
                 })
             if len(data) < 10 or not cursor:  # last page
                 break
     return jobs
+
+
+def jsearch_salary(j: dict) -> str:
+    if j.get("job_salary_string"):
+        return str(j["job_salary_string"])
+    def num(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+    lo, hi, per = num(j.get("job_min_salary")), num(j.get("job_max_salary")), j.get("job_salary_period")
+    if lo or hi:
+        rng = f"{lo:,.0f} - {hi:,.0f}" if lo and hi else f"{(lo or hi):,.0f}"
+        return f"{rng} {j.get('job_salary_currency') or ''} {('per ' + str(per).lower()) if per else ''}".strip()
+    return ""
 
 
 def fetch_adzuna(cfg: dict) -> list[dict]:
@@ -156,6 +180,13 @@ def fetch_adzuna(cfg: dict) -> list[dict]:
                     "url": j.get("redirect_url") or "",
                     "source": "Adzuna",
                     "posted": j.get("created") or "",
+                    "posted_ago": "",
+                    "employment_type": " ".join(x for x in [j.get("contract_time"), j.get("contract_type")] if x)
+                                       .replace("_", " "),
+                    "salary": (f"INR {j['salary_min']:,.0f} - {j['salary_max']:,.0f} per year"
+                               if j.get("salary_min") and j.get("salary_max") else ""),
+                    "google_link": "",
+                    "also_on": "",
                     "description": j.get("description") or "",
                 })
     return jobs
@@ -339,6 +370,110 @@ def build_report(jobs: list[dict], stats: dict, today: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Downloadable export (HTML + CSV), uploaded as a workflow artifact
+# --------------------------------------------------------------------------- #
+EXPORT_FIELDS = [
+    ("title", "Role"), ("company", "Company"), ("location", "Location"), ("remote", "Remote"),
+    ("employment_type", "Job type"), ("salary", "Salary"), ("posted_ago", "Posted"),
+    ("posted", "Posted (UTC)"), ("source", "Source"), ("also_on", "Also listed on"),
+    ("match_pct", "Match %"), ("score", "Score"), ("hits", "Your skills it asks for"),
+    ("missing", "Other skills it asks for"), ("ai_fit", "AI fit"), ("ai_why", "AI note"),
+    ("url", "Apply link"), ("google_link", "Google Jobs link"), ("summary", "Description (short)"),
+]
+
+
+def summary_of(job: dict, limit: int = 400) -> str:
+    text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", job.get("description") or "")).strip()
+    return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0] + " ..."
+
+
+def export_value(job: dict, key: str):
+    if key == "summary":
+        return summary_of(job)
+    v = job.get(key, "")
+    if isinstance(v, list):
+        return ", ".join(v)
+    if isinstance(v, bool):
+        return "Yes" if v else "No"
+    return "" if v is None else v
+
+
+def write_exports(matched: list[dict], others: list[dict], stats: dict, today: str) -> None:
+    EXPORT_DIR.mkdir(exist_ok=True)
+    with open(EXPORT_DIR / f"jobs-{today}.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["Status", "Reason"] + [label for _, label in EXPORT_FIELDS])
+        for status, rows in (("Match", matched), ("Below filters", others)):
+            for j in rows:
+                w.writerow([status, j.get("reason", "")] + [export_value(j, k) for k, _ in EXPORT_FIELDS])
+    (EXPORT_DIR / f"jobs-{today}.html").write_text(build_html(matched, others, stats, today), encoding="utf-8")
+    log(f"Export: {EXPORT_DIR.name}/jobs-{today}.html and .csv ({len(matched)} matches, {len(others)} others)")
+
+
+def build_html(matched: list[dict], others: list[dict], stats: dict, today: str) -> str:
+    e = lambda v: html.escape(str(v if v is not None else ""), quote=True)
+
+    def card(n: int, j: dict, dim: bool = False) -> str:
+        link = (f'<a class="apply" href="{e(j["url"])}" target="_blank" rel="noopener">Apply ↗</a>'
+                if j.get("url") else "")
+        glink = (f' <a href="{e(j["google_link"])}" target="_blank" rel="noopener">Google Jobs</a>'
+                 if j.get("google_link") else "")
+        facts = [("Location", j.get("location") or "-"), ("Remote", "Yes" if j.get("remote") else "No"),
+                 ("Job type", j.get("employment_type") or "-"), ("Salary", j.get("salary") or "Not listed"),
+                 ("Posted", j.get("posted_ago") or (j.get("posted") or "")[:10] or "-"),
+                 ("Source", j.get("source") or "-")]
+        if j.get("also_on"):
+            facts.append(("Also on", j["also_on"]))
+        if j.get("ai_fit") is not None:
+            facts.append(("AI fit", f"{j['ai_fit']}/10 - {j.get('ai_why', '')}"))
+        if dim:
+            facts.append(("Why hidden", j.get("reason", "")))
+        dl = "".join(f"<div><dt>{e(k)}</dt><dd>{e(v)}</dd></div>" for k, v in facts)
+        hits = "".join(f'<span class="tag yes">{e(h)}</span>' for h in j.get("hits", []))
+        miss = "".join(f'<span class="tag no">{e(h)}</span>' for h in j.get("missing", []))
+        return f"""
+<article class="job{' dim' if dim else ''}" data-text="{e((j.get('title','') + ' ' + j.get('company','') + ' ' + j.get('location','')).lower())}">
+  <header>
+    <div><span class="num">{n}</span><h3>{e(j.get('title'))}</h3><p class="co">{e(j.get('company'))}</p></div>
+    <div class="right"><span class="pct">{e(j.get('match_pct', 0))}% match</span>{link}</div>
+  </header>
+  <dl>{dl}</dl>
+  <p class="skills">{hits}{miss}</p>
+  <details><summary>Description</summary><p>{e(summary_of(j, 1500))}</p>{glink}</details>
+</article>"""
+
+    matched_html = "".join(card(i, j) for i, j in enumerate(matched, 1)) or "<p>No new matching jobs today.</p>"
+    others_html = "".join(card(i, j, dim=True) for i, j in enumerate(others, 1)) or "<p>None.</p>"
+    return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jobs for {e(today)}</title>
+<style>
+:root {{ --bg:#f6f8fb; --card:#fff; --text:#172033; --muted:#5b6577; --line:#dfe5ee; --accent:#0f62fe; --ok:#e6f4ea; --okt:#137333; --no:#fde7e7; --not:#a50e0e; }}
+@media (prefers-color-scheme: dark) {{ :root {{ --bg:#0d1117; --card:#151b24; --text:#e6eaf2; --muted:#9aa5b8; --line:#263041; --accent:#6ea0ff; --ok:#12301c; --okt:#7ee2a0; --no:#3a1717; --not:#ff9b9b; }} }}
+* {{ box-sizing:border-box; }} body {{ margin:0; font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif; background:var(--bg); color:var(--text); }}
+main {{ max-width:1000px; margin:0 auto; padding:24px 16px 60px; }} h1 {{ margin:0 0 4px; }} .sub {{ color:var(--muted); margin:0 0 16px; }}
+input {{ width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:var(--card); color:var(--text); font-size:1rem; margin-bottom:16px; }}
+.job {{ background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px; margin-bottom:12px; }}
+.job.dim {{ opacity:.8; }} .job header {{ display:flex; justify-content:space-between; gap:12px; align-items:flex-start; }}
+.num {{ color:var(--muted); font-weight:700; margin-right:6px; }} h3 {{ display:inline; font-size:1.05rem; margin:0; }} .co {{ margin:2px 0 0; color:var(--muted); }}
+.right {{ display:flex; flex-direction:column; align-items:flex-end; gap:8px; flex:none; }} .pct {{ font-weight:700; color:var(--accent); }}
+a.apply {{ background:var(--accent); color:#fff; padding:7px 14px; border-radius:8px; text-decoration:none; font-weight:600; white-space:nowrap; }}
+dl {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:6px 16px; margin:12px 0 8px; }} dt {{ font-size:.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }} dd {{ margin:0; font-size:.92rem; }}
+.tag {{ display:inline-block; font-size:.8rem; padding:2px 8px; border-radius:999px; margin:2px 4px 2px 0; }} .tag.yes {{ background:var(--ok); color:var(--okt); }} .tag.no {{ background:var(--no); color:var(--not); }}
+details {{ margin-top:6px; }} summary {{ cursor:pointer; color:var(--accent); }} details p {{ color:var(--muted); font-size:.92rem; line-height:1.5; }}
+h2 {{ margin:28px 0 10px; }} .legend {{ font-size:.85rem; color:var(--muted); }}
+</style></head><body><main>
+<h1>Jobs for {e(today)}</h1>
+<p class="sub">Fetched {e(stats['fetched'])} posts, {e(stats['new'])} new. <b>{len(matched)}</b> match your profile (at least {e(stats.get('min_skill_match', 0))}% skill match), {len(others)} more below your filters.</p>
+<input id="q" placeholder="Filter by role, company or location..." oninput="for (const a of document.querySelectorAll('.job')) a.style.display = a.dataset.text.includes(this.value.toLowerCase()) ? '' : 'none'">
+<p class="legend"><span class="tag yes">green</span> = your skills the job asks for, <span class="tag no">red</span> = other skills it asks for.</p>
+<h2>Matches ({len(matched)})</h2>{matched_html}
+<h2>Below your filters ({len(others)})</h2>{others_html}
+</main></body></html>
+"""
+
+
+# --------------------------------------------------------------------------- #
 def main() -> int:
     cfg = yaml.safe_load((ROOT / "profile.yaml").read_text())
     today = datetime.now(IST).strftime("%Y-%m-%d")
@@ -363,20 +498,34 @@ def main() -> int:
 
     new_jobs = [j for fp, j in by_fp.items() if fp not in seen]
 
-    matched = []
+    matched, others = [], []   # others = new jobs that did not pass the filters (kept for the export)
     for j in new_jobs:
+        j.setdefault("score", 0); j.setdefault("hits", []); j.setdefault("match_pct", 0); j.setdefault("missing", [])
         if not location_ok(j, cfg):
-            continue
+            j["reason"] = "location"
+            others.append(j); continue
         res = score_job(j, cfg)
         if res is None:
-            continue
+            j["reason"] = "excluded title or keyword"
+            others.append(j); continue
         j["score"], j["hits"] = res
         j["match_pct"], j["missing"] = skill_match(norm(j["title"]), norm(j["description"]), j["hits"], cfg)
-        if j["score"] >= cfg.get("min_score", 0) and j["match_pct"] >= cfg.get("min_skill_match", 0):
+        if j["match_pct"] < cfg.get("min_skill_match", 0):
+            j["reason"] = f"skill match {j['match_pct']}% < {cfg.get('min_skill_match', 0)}%"
+            others.append(j)
+        elif j["score"] < cfg.get("min_score", 0):
+            j["reason"] = f"score {j['score']} < {cfg.get('min_score', 0)}"
+            others.append(j)
+        else:
             matched.append(j)
 
     matched.sort(key=lambda j: (j["match_pct"], j["score"]), reverse=True)
-    matched = matched[: int(cfg.get("max_results", 30))]
+    cap = int(cfg.get("max_results", 30))
+    for j in matched[cap:]:
+        j["reason"] = f"over max_results ({cap})"
+    others += matched[cap:]
+    matched = matched[:cap]
+    others.sort(key=lambda j: (j["match_pct"], j["score"]), reverse=True)
 
     ai_rerank(matched, cfg)
     if any("ai_fit" in j for j in matched):
@@ -392,6 +541,7 @@ def main() -> int:
     REPORT_DIR.mkdir(exist_ok=True)
     (REPORT_DIR / f"{today}.md").write_text(report)
     (ROOT / "latest_report.md").write_text(report)
+    write_exports(matched, others, stats, today)
 
     # outputs for the workflow
     gh_out = os.getenv("GITHUB_OUTPUT")
@@ -399,6 +549,7 @@ def main() -> int:
         with open(gh_out, "a") as f:
             f.write(f"match_count={len(matched)}\n")
             f.write(f"report_date={today}\n")
+            f.write(f"export_dir={EXPORT_DIR}\n")
 
     log(f"Done: {len(matched)} matches written to reports/{today}.md")
     return 0

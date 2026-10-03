@@ -34,6 +34,17 @@ for Jobs.
 
 ## Where to see the jobs
 
+- **Download the job list from the run (easiest):** open the run under
+  [Actions](https://github.com/SivaKumarMahan/job-search/actions), scroll to **Artifacts** at the bottom,
+  and download **job-list-YYYY-MM-DD**. Unzip it and open:
+  - `jobs-YYYY-MM-DD.html` in a browser: one card per job with an **Apply** button, match %, location,
+    remote, job type, salary (when listed), posted time, source, other sites it is listed on, the skills
+    it asks for (yours in green, others in red) and a short description. There is also a filter box.
+  - `jobs-YYYY-MM-DD.csv` in Excel or Google Sheets: the same details, one row per job, with the apply links.
+
+  Both files also list the jobs that were fetched but hidden, and why (for example "skill match 33% < 75%").
+  Artifacts are kept for 30 days; you must be signed in to GitHub to download them.
+- **Run page:** the same list is shown on the run's **Summary** page, with clickable links.
 - **GitHub Issue (main view):** <https://github.com/SivaKumarMahan/job-search/issues?q=label%3Ajob-matches>.
   Each day's list is a new Issue, and GitHub emails it to you if you watch the repo.
   The **Apply** column links straight to the job posting (Naukri, LinkedIn, Indeed, company site, ...).

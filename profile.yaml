@@ -1,0 +1,90 @@
+# ---------------------------------------------------------------
+# Your job-search profile. Edit this file, commit, and the next
+# daily run uses it. No code changes needed.
+# ---------------------------------------------------------------
+
+# Search queries sent to the job APIs (one API call per query per source).
+# Keep this list short: free tiers have monthly request limits.
+queries:
+  - "Azure DevOps Engineer"
+  - "Site Reliability Engineer"
+  - "Platform Engineer Kubernetes"
+  - "Cloud Infrastructure Engineer Terraform"
+
+# Locations (India). Used by Adzuna "where" and appended to JSearch queries.
+# Quota: JSearch = 1 call per query per day; Adzuna = 1 call per query per location per day.
+# 4 queries x 1 location = 4 + 4 calls a day (about 120 + 120 a month).
+locations:
+  - "Hyderabad"
+include_remote: true
+
+country: "in"          # ISO country code for both APIs
+max_days_old: 1        # only jobs posted in the last N days
+
+# Scoring --------------------------------------------------------
+# Each skill found in the title/description adds its weight.
+# Weighted to the resume: Azure, AKS, Terraform/OpenTofu, Bicep, Azure DevOps first.
+skills:
+  azure: 3
+  aks: 3
+  terraform: 3
+  bicep: 3
+  "azure devops": 3
+  kubernetes: 2
+  opentofu: 2
+  helm: 2
+  "github actions": 2
+  "ci/cd": 2
+  splunk: 2
+  docker: 1
+  jenkins: 1
+  gitlab: 1
+  ansible: 1
+  prometheus: 1
+  grafana: 1
+  "azure monitor": 1
+  "key vault": 1
+  python: 1
+  devsecops: 1
+  trivy: 1
+  sonarqube: 1
+
+# Bonus points if these appear in the TITLE.
+title_bonus:
+  devops: 4
+  sre: 4
+  "site reliability": 4
+  platform: 3
+  cloud: 2
+  "lead": 2
+  "senior": 2
+
+# Jobs whose title contains any of these are dropped.
+exclude_title:
+  - "intern"
+  - "fresher"
+  - "trainee"
+  - "junior"
+  - "sales"
+  - "manual test"
+
+# Jobs whose description contains any of these are dropped.
+exclude_description: []
+
+min_score: 8           # drop anything scoring below this
+max_results: 30        # cap on jobs listed in the daily report
+
+# Optional: AI re-ranking with Claude (only runs if ANTHROPIC_API_KEY secret is set)
+ai_summary:
+  enabled: true
+  top_n: 15            # how many of the best keyword matches to send to Claude
+  model: "claude-haiku-4-5"
+  resume_summary: |
+    DevOps & Cloud Engineer with 5.6+ years on Microsoft Azure (Impressico Business
+    Solutions since Jan 2025; Infosys 2021-2024). Azure Kubernetes Service (node pools,
+    autoscaling, zero-downtime upgrades), Terraform/OpenTofu and Bicep, Azure DevOps,
+    GitHub Actions, GitLab CI and Jenkins pipelines with SonarQube/Trivy/Checkov gates,
+    Azure Monitor/Log Analytics/KQL, Prometheus/Grafana and Splunk, Key Vault, Managed
+    Identity, RBAC, Python and Bash. Certified AZ-400, AZ-104, AZ-900.
+    Looking for Senior / Lead DevOps, SRE, Platform or Cloud Infrastructure roles in
+    Hyderabad or remote. Notice period: 30 days.

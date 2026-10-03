@@ -1,0 +1,65 @@
+name: Daily job matches
+
+on:
+  schedule:
+    # 02:30 UTC = 08:00 IST, every day
+    - cron: "30 2 * * *"
+  workflow_dispatch: {}   # lets you run it manually from the Actions tab
+
+permissions:
+  contents: write   # commit reports/ and data/seen.json back to the repo
+  issues: write     # post the daily list as an Issue
+
+concurrency:
+  group: daily-jobs
+  cancel-in-progress: false
+
+jobs:
+  find-jobs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Find and score jobs
+        id: find
+        env:
+          RAPIDAPI_KEY: ${{ secrets.RAPIDAPI_KEY }}
+          ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
+          ADZUNA_APP_KEY: ${{ secrets.ADZUNA_APP_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python find_jobs.py
+
+      - name: Post the list as a GitHub Issue
+        if: steps.find.outputs.match_count != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create job-matches --color 0E8A16 --force >/dev/null 2>&1 || true
+          # close yesterday's issue so only the latest stays open
+          for n in $(gh issue list --label job-matches --state open --json number -q '.[].number'); do
+            gh issue close "$n" --comment "Superseded by the ${{ steps.find.outputs.report_date }} list." || true
+          done
+          gh issue create \
+            --title "Jobs for ${{ steps.find.outputs.report_date }} (${{ steps.find.outputs.match_count }} matches)" \
+            --label job-matches \
+            --assignee "${{ github.repository_owner }}" \
+            --body-file latest_report.md
+
+      - name: Commit report and seen-jobs state
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add reports/ data/seen.json
+          git diff --cached --quiet || git commit -m "Job report ${{ steps.find.outputs.report_date }}"
+          # someone may have pushed (e.g. a profile.yaml edit) while the job ran
+          git pull --rebase --autostash
+          git push

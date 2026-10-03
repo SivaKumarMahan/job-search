@@ -32,6 +32,8 @@ SEEN_FILE = ROOT / "data" / "seen.json"
 REPORT_DIR = ROOT / "reports"
 SEEN_RETENTION_DAYS = 60
 TIMEOUT = 30
+# JSearch v5 moved job search from /search to /search-v2 ("Endpoint '/search' does not exist").
+JSEARCH_URL = "https://jsearch.p.rapidapi.com/search-v2"
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -59,14 +61,12 @@ def fetch_jsearch(cfg: dict) -> list[dict]:
         query = f"{q} in {loc_text}" if loc_text else q
         params = {
             "query": query,
-            "page": "1",
             "num_pages": "1",
             "country": cfg.get("country", "in"),
             "date_posted": date_posted,
         }
         try:
-            r = requests.get("https://jsearch.p.rapidapi.com/search",
-                             headers=headers, params=params, timeout=TIMEOUT)
+            r = requests.get(JSEARCH_URL, headers=headers, params=params, timeout=TIMEOUT)
         except Exception as e:  # network error: keep going with the next query
             log(f"JSearch: query '{query}' failed: {e}")
             continue

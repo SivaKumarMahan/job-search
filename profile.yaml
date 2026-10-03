@@ -19,7 +19,8 @@ locations:
 include_remote: true
 
 country: "in"          # ISO country code for both APIs
-max_days_old: 1        # only jobs posted in the last N days
+max_days_old: 3        # jobs posted in the last N days (1 = today only, which is often empty for India).
+                       # Already-seen jobs are skipped, so 3 does not repeat jobs.
 
 # Scoring --------------------------------------------------------
 # Each skill found in the title/description adds its weight.

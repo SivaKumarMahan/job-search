@@ -79,19 +79,23 @@ def fetch_jsearch(cfg: dict) -> list[dict]:
                 log(f"JSearch: query '{query}' failed: HTTP {r.status_code}: {body}")
             continue
         try:
-            data = r.json().get("data", []) or []
+            payload = r.json().get("data") or []
         except ValueError as e:
             log(f"JSearch: query '{query}' returned invalid JSON: {e}")
             continue
+        # JSearch v5 returns {"data": {"jobs": [...]}}; older versions returned {"data": [...]}
+        data = payload.get("jobs", []) if isinstance(payload, dict) else payload
+        data = data or []
 
         log(f"JSearch: '{query}' -> {len(data)} jobs")
         for j in data:
             city = ", ".join(x for x in [j.get("job_city"), j.get("job_state")] if x)
+            where = city or j.get("job_location") or ("Remote" if j.get("job_is_remote") else "")
             jobs.append({
                 "id": f"jsearch:{j.get('job_id')}",
                 "title": j.get("job_title") or "",
                 "company": j.get("employer_name") or "",
-                "location": city or ("Remote" if j.get("job_is_remote") else ""),
+                "location": where,
                 "remote": bool(j.get("job_is_remote")),
                 "url": j.get("job_apply_link") or j.get("job_google_link") or "",
                 "source": j.get("job_publisher") or "JSearch",

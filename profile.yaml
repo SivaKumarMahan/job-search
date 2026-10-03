@@ -6,10 +6,42 @@
 # Search queries sent to the job APIs (one API call per query per source).
 # Keep this list short: free tiers have monthly request limits.
 queries:
-  - "Azure DevOps Engineer"
+  - "Azure DevOps Engineer"          # also finds Senior Azure DevOps Engineer
+  - "Azure Cloud Engineer"
+  - "DevSecOps Engineer"
   - "Site Reliability Engineer"
-  - "Platform Engineer Kubernetes"
-  - "Cloud Infrastructure Engineer Terraform"
+  - "Platform Engineer"
+  - "Azure Cloud Architect"          # also finds Cloud Architect / Cloud Infrastructure Architect
+  - "Kubernetes Administrator"
+# Quota: JSearch free plan = 200 calls a month. 7 queries x 1 call, Monday-Saturday
+# (see .github/workflows/daily-jobs.yml) = about 182 calls a month.
+
+# Only show jobs listed on these job sites (matched against the job's publisher and
+# its other apply links; the Apply link points to that site). Remove the list to allow all sites.
+allowed_sources:
+  - "linkedin"
+  - "naukri"
+
+# Only show these roles: the job title must contain one of these phrases.
+allowed_titles:
+  - "devops engineer"                # Azure DevOps Engineer, Senior Azure DevOps Engineer
+  - "devsecops"
+  - "cloud engineer"                 # Azure Cloud Engineer
+  - "site reliability"
+  - "sre"
+  - "platform engineer"
+  - "cloud architect"
+  - "cloud infrastructure architect"
+  - "kubernetes administrator"
+  - "kubernetes admin"
+
+# Experience the job asks for, read from the description ("5+ years", "6-10 years",
+# "minimum 5 years"). Jobs whose entry level is below min_years are hidden.
+# Postings use whole years, so 5 means "jobs for 5+ years of experience" (you have 5.6).
+experience_filter:
+  enabled: true
+  min_years: 5
+  keep_not_stated: true    # keep jobs that do not mention years of experience
 
 # Locations (India). Used by Adzuna "where" and appended to JSearch queries.
 # Quota: JSearch = 1 call per query per day; Adzuna = 1 call per query per location per day.
@@ -20,8 +52,9 @@ include_remote: true
 
 country: "in"          # ISO country code for both APIs
 pages_per_query: 1     # each JSearch call returns up to 10 jobs; 2 = up to 20 per query (costs 2 calls)
-max_days_old: 3        # jobs posted in the last N days (1 = today only, which is often empty for India).
-                       # Already-seen jobs are skipped, so 3 does not repeat jobs.
+max_days_old: 3        # every run checks jobs posted in the last 3 days only.
+                       # The Issue lists only jobs you have not been sent before; the downloadable
+                       # job list shows all of them, with NEW on the ones not in an earlier run.
 
 # Scoring --------------------------------------------------------
 # Each skill found in the title/description adds its weight.
@@ -53,6 +86,10 @@ skills:
 
 # Bonus points if these appear in the TITLE.
 title_bonus:
+  azure: 3
+  devsecops: 4
+  architect: 2
+  kubernetes: 2
   devops: 4
   sre: 4
   "site reliability": 4

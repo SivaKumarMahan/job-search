@@ -118,6 +118,9 @@ def fetch_jsearch(cfg: dict) -> list[dict]:
                     "also_on": ", ".join(sorted({o.get("publisher", "") for o in (j.get("apply_options") or [])
                                                  if o.get("publisher")} - {j.get("job_publisher") or ""})),
                     "description": j.get("job_description") or "",
+                    "apply_options": [(j.get("job_publisher") or "", j.get("job_apply_link") or "")] + [
+                        (o.get("publisher") or "", o.get("apply_link") or "") for o in (j.get("apply_options") or [])],
+                    "exp_months": ((j.get("job_required_experience") or {}).get("required_experience_in_months")),
                 })
             if len(data) < 10 or not cursor:  # last page
                 break
@@ -208,6 +211,64 @@ def fingerprint(job: dict) -> str:
     """Same job posted on several boards -> same fingerprint."""
     key = f"{norm(job['title'])}|{norm(job['company'])}"
     return hashlib.sha1(key.encode()).hexdigest()[:16]
+
+
+def pick_source(job: dict, allowed: list[str]) -> tuple[str, str] | None:
+    """Return (publisher, apply link) for the first allowed board the job is listed on, e.g. LinkedIn or Naukri."""
+    options = job.get("apply_options") or [(job.get("source", ""), job.get("url", ""))]
+    for name in allowed:
+        for publisher, link in options:
+            if name in (publisher or "").lower() and link:
+                return publisher, link
+    return None
+
+
+def posted_within(job: dict, days: int) -> bool:
+    raw = job.get("posted") or ""
+    try:
+        posted = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return True  # unknown date: keep, the API already filtered by date
+    if posted.tzinfo is None:
+        posted = posted.replace(tzinfo=timezone.utc)
+    return posted >= datetime.now(timezone.utc) - timedelta(days=days, hours=12)
+
+
+_NUM = r"(\d{1,2}(?:\.\d)?)"
+_YRS = r"\s*(?:\+\s*)?(?:years?|yrs?)"
+EXP_RANGE = re.compile(_NUM + r"\s*(?:-|–|—|to|--)\s*" + _NUM + _YRS)
+EXP_PLUS = re.compile(_NUM + r"\s*(?:\+|plus)\s*(?:years?|yrs?)")
+EXP_MIN = re.compile(r"(?:minimum|min\.?|at least|atleast)\s*(?:of\s*)?" + _NUM + _YRS)
+EXP_PLAIN = re.compile(_NUM + _YRS + r"\s*(?:of\s*)?(?:\w+\s+){0,3}?(?:experience|exp\b)")
+
+
+def experience_required(job: dict) -> tuple[float, float | None] | None:
+    """Required experience as (min_years, max_years or None). None when the post does not say."""
+    months = job.get("exp_months")
+    if isinstance(months, (int, float)) and months > 0:
+        return months / 12, None
+    text = norm(job.get("description", ""))
+    found: list[tuple[float, float | None]] = []
+    for lo, hi in EXP_RANGE.findall(text):
+        found.append((float(lo), float(hi)))
+    rest = EXP_RANGE.sub(" ", text)   # so "5-8 yrs of experience" is not also read as "8 yrs"
+    for rx in (EXP_PLUS, EXP_MIN, EXP_PLAIN):
+        for n in rx.findall(rest):
+            found.append((float(n), None))
+    found = [(lo, hi) for lo, hi in found if 0 < lo <= 30 and (hi is None or lo <= hi <= 40)]
+    if not found:
+        return None
+    lo = min(f[0] for f in found)                       # the entry bar the post mentions
+    his = [f[1] for f in found if f[1] is not None]
+    return lo, (max(his) if his and all(f[1] is not None for f in found) else None)
+
+
+def experience_text(exp: tuple[float, float | None] | None) -> str:
+    if not exp:
+        return "Not stated"
+    lo, hi = exp
+    fmt = lambda x: f"{x:g}"
+    return f"{fmt(lo)}-{fmt(hi)} years" if hi is not None else f"{fmt(lo)}+ years"
 
 
 def skill_match(title: str, desc: str, hits: list[str], cfg: dict) -> tuple[int, list[str]]:
@@ -337,9 +398,11 @@ def md_escape(s: str) -> str:
 def build_report(jobs: list[dict], stats: dict, today: str) -> str:
     lines = [f"# Job matches for {today}", ""]
     lines.append(
-        f"Fetched **{stats['fetched']}** posts, **{stats['new']}** new, "
-        f"**{len(jobs)}** match your profile "
-        f"(at least {stats.get('min_skill_match', 0)}% of the skills each job asks for)."
+        f"Fetched **{stats['fetched']}** posts from the last {stats.get('days', 3)} days; "
+        f"**{stats.get('pool', 0)}** are your roles on {stats.get('sources', 'all sites')}. "
+        f"**{len(jobs)}** new jobs match your profile "
+        f"(at least {stats.get('min_skill_match', 0)}% skill match). "
+        f"The downloadable job list on the workflow run has every job from the last {stats.get('days', 3)} days."
     )
     lines.append("")
     if not jobs:
@@ -347,7 +410,7 @@ def build_report(jobs: list[dict], stats: dict, today: str) -> str:
         return "\n".join(lines) + "\n"
 
     has_ai = any("ai_fit" in j for j in jobs)
-    header = "| # | Apply | Role | Company | Location | Source | Match % | Score | Your skills it asks for | Other skills it asks for |"
+    header = "| # | Apply | Role | Company | Location | Source | Experience | Match % | Your skills it asks for | Other skills it asks for |"
     sep = "|---|---|---|---|---|---|---|---|---|---|"
     if has_ai:
         header += " AI fit | Why |"
@@ -359,7 +422,7 @@ def build_report(jobs: list[dict], stats: dict, today: str) -> str:
         role = f"[{md_escape(j['title'])}](<{j['url']}>)" if j["url"] else md_escape(j["title"])
         row = (f"| {n} | {apply} | {role} | {md_escape(j['company'])} | "
                f"{md_escape(j['location']) or '-'} | {md_escape(j['source'])} | "
-               f"{j.get('match_pct', 0)}% | {j['score']} | {', '.join(j['hits'][:8])} | "
+               f"{j.get('experience', '-')} | {j.get('match_pct', 0)}% | {', '.join(j['hits'][:8])} | "
                f"{', '.join(j.get('missing', [])[:6]) or '-'} |")
         if has_ai:
             fit = j.get("ai_fit")
@@ -373,8 +436,8 @@ def build_report(jobs: list[dict], stats: dict, today: str) -> str:
 # Downloadable export (HTML + CSV), uploaded as a workflow artifact
 # --------------------------------------------------------------------------- #
 EXPORT_FIELDS = [
-    ("title", "Role"), ("company", "Company"), ("location", "Location"), ("remote", "Remote"),
-    ("employment_type", "Job type"), ("salary", "Salary"), ("posted_ago", "Posted"),
+    ("new", "New since last run"), ("title", "Role"), ("company", "Company"), ("location", "Location"), ("remote", "Remote"),
+    ("experience", "Experience required"), ("employment_type", "Job type"), ("salary", "Salary"), ("posted_ago", "Posted"),
     ("posted", "Posted (UTC)"), ("source", "Source"), ("also_on", "Also listed on"),
     ("match_pct", "Match %"), ("score", "Score"), ("hits", "Your skills it asks for"),
     ("missing", "Other skills it asks for"), ("ai_fit", "AI fit"), ("ai_why", "AI note"),
@@ -418,7 +481,8 @@ def build_html(matched: list[dict], others: list[dict], stats: dict, today: str)
                 if j.get("url") else "")
         glink = (f' <a href="{e(j["google_link"])}" target="_blank" rel="noopener">Google Jobs</a>'
                  if j.get("google_link") else "")
-        facts = [("Location", j.get("location") or "-"), ("Remote", "Yes" if j.get("remote") else "No"),
+        facts = [("Experience", j.get("experience") or "Not stated"),
+                 ("Location", j.get("location") or "-"), ("Remote", "Yes" if j.get("remote") else "No"),
                  ("Job type", j.get("employment_type") or "-"), ("Salary", j.get("salary") or "Not listed"),
                  ("Posted", j.get("posted_ago") or (j.get("posted") or "")[:10] or "-"),
                  ("Source", j.get("source") or "-")]
@@ -434,7 +498,7 @@ def build_html(matched: list[dict], others: list[dict], stats: dict, today: str)
         return f"""
 <article class="job{' dim' if dim else ''}" data-text="{e((j.get('title','') + ' ' + j.get('company','') + ' ' + j.get('location','')).lower())}">
   <header>
-    <div><span class="num">{n}</span><h3>{e(j.get('title'))}</h3><p class="co">{e(j.get('company'))}</p></div>
+    <div><span class="num">{n}</span>{'<span class="new">NEW</span>' if j.get('new') else ''}<h3>{e(j.get('title'))}</h3><p class="co">{e(j.get('company'))}</p></div>
     <div class="right"><span class="pct">{e(j.get('match_pct', 0))}% match</span>{link}</div>
   </header>
   <dl>{dl}</dl>
@@ -461,10 +525,13 @@ a.apply {{ background:var(--accent); color:#fff; padding:7px 14px; border-radius
 dl {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:6px 16px; margin:12px 0 8px; }} dt {{ font-size:.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }} dd {{ margin:0; font-size:.92rem; }}
 .tag {{ display:inline-block; font-size:.8rem; padding:2px 8px; border-radius:999px; margin:2px 4px 2px 0; }} .tag.yes {{ background:var(--ok); color:var(--okt); }} .tag.no {{ background:var(--no); color:var(--not); }}
 details {{ margin-top:6px; }} summary {{ cursor:pointer; color:var(--accent); }} details p {{ color:var(--muted); font-size:.92rem; line-height:1.5; }}
-h2 {{ margin:28px 0 10px; }} .legend {{ font-size:.85rem; color:var(--muted); }}
+h2 {{ margin:28px 0 10px; }} .new {{ background:#137333; color:#fff; font-size:.7rem; font-weight:700; padding:2px 6px; border-radius:6px; margin-right:6px; vertical-align:2px; }} .legend {{ font-size:.85rem; color:var(--muted); }}
 </style></head><body><main>
 <h1>Jobs for {e(today)}</h1>
-<p class="sub">Fetched {e(stats['fetched'])} posts, {e(stats['new'])} new. <b>{len(matched)}</b> match your profile (at least {e(stats.get('min_skill_match', 0))}% skill match), {len(others)} more below your filters.</p>
+<p class="sub">Jobs posted in the last {e(stats.get('days', 3))} days on {e(stats.get('sources', 'all sites'))}, for your roles only.
+Fetched {e(stats['fetched'])} posts; ignored {e(', '.join(f"{v} {k}" for k, v in (stats.get('ignored') or {}).items()))}.
+<b>{len(matched)}</b> match your profile (at least {e(stats.get('min_skill_match', 0))}% skill match), {len(others)} more below your filters.
+<span class="new">NEW</span> = not in an earlier run.</p>
 <input id="q" placeholder="Filter by role, company or location..." oninput="for (const a of document.querySelectorAll('.job')) a.style.display = a.dataset.text.includes(this.value.toLowerCase()) ? '' : 'none'">
 <p class="legend"><span class="tag yes">green</span> = your skills the job asks for, <span class="tag no">red</span> = other skills it asks for.</p>
 <h2>Matches ({len(matched)})</h2>{matched_html}
@@ -496,11 +563,37 @@ def main() -> int:
         job["fp"] = fp
         by_fp[fp] = job
 
-    new_jobs = [j for fp, j in by_fp.items() if fp not in seen]
+    days = int(cfg.get("max_days_old", 3))
+    allowed = [x.lower() for x in (cfg.get("allowed_sources") or [])]
+    roles = cfg.get("allowed_titles") or []
+    exp_cfg = cfg.get("experience_filter") or {}
+    ignored = {"older than %d days" % days: 0, "other job sites": 0, "other roles": 0}
 
-    matched, others = [], []   # others = new jobs that did not pass the filters (kept for the export)
-    for j in new_jobs:
+    # Step 1: drop jobs outside the window, from other sites, or for other roles (not shown anywhere)
+    pool = []
+    for fp, j in by_fp.items():
+        if not posted_within(j, days):
+            ignored["older than %d days" % days] += 1
+            continue
+        if allowed:
+            pick = pick_source(j, allowed)
+            if not pick:
+                ignored["other job sites"] += 1
+                continue
+            j["source"], j["url"] = pick
+        if roles and not any(contains(norm(j["title"]), r) for r in roles):
+            ignored["other roles"] += 1
+            continue
+        j["new"] = fp not in seen
+        pool.append(j)
+    log("Ignored: " + ", ".join(f"{v} {k}" for k, v in ignored.items()))
+
+    # Step 2: score the rest; keep the ones that miss a filter in "others" with the reason
+    matched, others = [], []
+    for j in pool:
         j.setdefault("score", 0); j.setdefault("hits", []); j.setdefault("match_pct", 0); j.setdefault("missing", [])
+        exp = experience_required(j)
+        j["experience"] = experience_text(exp)
         if not location_ok(j, cfg):
             j["reason"] = "location"
             others.append(j); continue
@@ -510,7 +603,14 @@ def main() -> int:
             others.append(j); continue
         j["score"], j["hits"] = res
         j["match_pct"], j["missing"] = skill_match(norm(j["title"]), norm(j["description"]), j["hits"], cfg)
-        if j["match_pct"] < cfg.get("min_skill_match", 0):
+        min_years = float(exp_cfg.get("min_years", 0)) if exp_cfg.get("enabled", True) else 0
+        if exp and min_years and exp[0] < min_years:
+            j["reason"] = f"asks for {j['experience']} (below {min_years:g}+)"
+            others.append(j)
+        elif not exp and min_years and not exp_cfg.get("keep_not_stated", True):
+            j["reason"] = "experience not stated"
+            others.append(j)
+        elif j["match_pct"] < cfg.get("min_skill_match", 0):
             j["reason"] = f"skill match {j['match_pct']}% < {cfg.get('min_skill_match', 0)}%"
             others.append(j)
         elif j["score"] < cfg.get("min_score", 0):
@@ -519,25 +619,29 @@ def main() -> int:
         else:
             matched.append(j)
 
-    matched.sort(key=lambda j: (j["match_pct"], j["score"]), reverse=True)
+    order = lambda j: (j.get("new", False), j["match_pct"], j["score"])
+    matched.sort(key=order, reverse=True)
     cap = int(cfg.get("max_results", 30))
     for j in matched[cap:]:
         j["reason"] = f"over max_results ({cap})"
     others += matched[cap:]
     matched = matched[:cap]
-    others.sort(key=lambda j: (j["match_pct"], j["score"]), reverse=True)
+    others.sort(key=order, reverse=True)
 
     ai_rerank(matched, cfg)
     if any("ai_fit" in j for j in matched):
-        matched.sort(key=lambda j: (j.get("ai_fit") or 0, j["match_pct"], j["score"]), reverse=True)
+        matched.sort(key=lambda j: (j.get("new", False), j.get("ai_fit") or 0, j["match_pct"], j["score"]), reverse=True)
 
-    # mark everything fetched as seen (even non-matches) so we don't re-score it tomorrow
+    # mark everything fetched as seen so the Issue only lists jobs you have not been sent before
     for fp in by_fp:
         seen.setdefault(fp, now_iso)
     save_seen(seen)
 
-    stats = {"fetched": len(raw), "new": len(new_jobs), "min_skill_match": cfg.get("min_skill_match", 0)}
-    report = build_report(matched, stats, today)
+    new_matches = [j for j in matched if j.get("new")]
+    stats = {"fetched": len(raw), "new": sum(1 for j in pool if j.get("new")), "pool": len(pool),
+             "days": days, "ignored": ignored, "min_skill_match": cfg.get("min_skill_match", 0),
+             "sources": ", ".join(cfg.get("allowed_sources") or []) or "all sites"}
+    report = build_report(new_matches, stats, today)
     REPORT_DIR.mkdir(exist_ok=True)
     (REPORT_DIR / f"{today}.md").write_text(report)
     (ROOT / "latest_report.md").write_text(report)
@@ -547,11 +651,11 @@ def main() -> int:
     gh_out = os.getenv("GITHUB_OUTPUT")
     if gh_out:
         with open(gh_out, "a") as f:
-            f.write(f"match_count={len(matched)}\n")
+            f.write(f"match_count={len(new_matches)}\n")
             f.write(f"report_date={today}\n")
             f.write(f"export_dir={EXPORT_DIR}\n")
 
-    log(f"Done: {len(matched)} matches written to reports/{today}.md")
+    log(f"Done: {len(matched)} matches in the last {days} days ({len(new_matches)} new); report in reports/{today}.md")
     return 0
 
 

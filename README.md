@@ -1,7 +1,7 @@
 # Daily Job Finder
 
-A GitHub Actions workflow that runs every morning at 08:00 IST. It pulls new
-DevOps/SRE/Platform job posts from job-aggregator APIs, scores them against
+A GitHub Actions workflow that runs at 08:00 IST, Monday to Saturday. It pulls
+Azure DevOps / Cloud / SRE / Platform job posts from the last 3 days, scores them against
 `profile.yaml`, skips jobs it has already shown you, and posts the ranked list
 as a GitHub Issue. GitHub then emails you the Issue.
 
@@ -50,10 +50,26 @@ for Jobs.
   The **Apply** column links straight to the job posting (Naukri, LinkedIn, Indeed, company site, ...).
 - **Report files:** every list is also saved in [`reports/`](reports/) as `YYYY-MM-DD.md`.
 
+## Filters (all in `profile.yaml`)
+
+| Filter | Setting | Current value |
+|---|---|---|
+| Job sites | `allowed_sources` | LinkedIn and Naukri only (the Apply link opens that site) |
+| Roles | `allowed_titles` | Azure DevOps / DevOps, DevSecOps, Cloud Engineer, SRE, Platform Engineer, Cloud (Infrastructure) Architect, Kubernetes Administrator |
+| Date | `max_days_old` | Posted in the last 3 days |
+| Experience | `experience_filter.min_years` | Jobs asking for 5+ years (jobs that don't state it are kept) |
+| Skills | `min_skill_match` | At least 75% of the technologies the job mentions are yours |
+| Location | `locations`, `include_remote` | Hyderabad, plus remote |
+
+Jobs from other sites, for other roles, or older than 3 days are dropped completely.
+Jobs that miss the experience, skill or score filters still appear in the downloadable
+list under "Below your filters", with the reason.
+
 ## How many jobs per run
 
-- JSearch returns at most **10 jobs per call**. With 4 queries that is up to **40 jobs a day** before filtering.
-- `pages_per_query: 2` fetches up to 20 per query (80 a day), but uses 2 calls per query.
+- JSearch returns at most **10 jobs per call**. With 7 queries that is up to **70 jobs a run** before filtering.
+- Quota: the free JSearch plan allows 200 calls a month. 7 queries, Monday to Saturday, is about 182.
+- `pages_per_query: 2` fetches up to 20 per query, but doubles the calls (over the free plan).
 - The report lists at most `max_results` jobs (30 by default).
 
 ## Skill match %

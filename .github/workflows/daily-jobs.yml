@@ -2,8 +2,9 @@ name: Daily job matches
 
 on:
   schedule:
-    # 02:30 UTC = 08:00 IST, every day
-    - cron: "30 2 * * *"
+    # 02:30 UTC = 08:00 IST, Monday to Saturday (7 queries x ~26 runs = ~182 JSearch calls,
+    # inside the free plan's 200 a month). Monday's run still covers Sunday (3-day window).
+    - cron: "30 2 * * 1-6"
   workflow_dispatch: {}   # lets you run it manually from the Actions tab
 
 permissions:

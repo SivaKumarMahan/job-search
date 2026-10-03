@@ -32,10 +32,30 @@ for Jobs.
 - Adzuna makes 1 call per query per location per day (8 by default).
 - To save quota, use fewer, broader queries and let `skills` do the filtering.
 
+## Where to see the jobs
+
+- **GitHub Issue (main view):** <https://github.com/SivaKumarMahan/job-search/issues?q=label%3Ajob-matches>.
+  Each day's list is a new Issue, and GitHub emails it to you if you watch the repo.
+  The **Apply** column links straight to the job posting (Naukri, LinkedIn, Indeed, company site, ...).
+- **Report files:** every list is also saved in [`reports/`](reports/) as `YYYY-MM-DD.md`.
+
+## How many jobs per run
+
+- JSearch returns at most **10 jobs per call**. With 4 queries that is up to **40 jobs a day** before filtering.
+- `pages_per_query: 2` fetches up to 20 per query (80 a day), but uses 2 calls per query.
+- The report lists at most `max_results` jobs (30 by default).
+
+## Skill match %
+
+For each job, the script finds the technologies it mentions: your `skills`, plus the
+`other_tech` terms you don't list. **Match %** = your skills / all technologies mentioned.
+Example: Azure, AKS, Terraform and AWS mentioned → 3 of 4 are yours → 75%.
+Jobs below `min_skill_match` (75 by default) are hidden; set it to 0 to turn the filter off.
+
 ## Tuning
 
-- Too much noise → raise `min_score`, or add words to `exclude_title`.
-- Missing good jobs → lower `min_score`, or add skills and title words.
+- Too much noise → raise `min_skill_match` or `min_score`, or add words to `exclude_title`.
+- Missing good jobs → lower `min_skill_match` (e.g. 60) or `min_score`, or add skills and title words.
 - Results are de-duplicated across boards (same title + company) and remembered
   for 60 days in `data/seen.json`.
 - Every day's list is also saved in `reports/YYYY-MM-DD.md`.

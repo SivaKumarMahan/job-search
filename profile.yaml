@@ -19,6 +19,7 @@ locations:
 include_remote: true
 
 country: "in"          # ISO country code for both APIs
+pages_per_query: 1     # each JSearch call returns up to 10 jobs; 2 = up to 20 per query (costs 2 calls)
 max_days_old: 3        # jobs posted in the last N days (1 = today only, which is often empty for India).
                        # Already-seen jobs are skipped, so 3 does not repeat jobs.
 
@@ -59,6 +60,50 @@ title_bonus:
   cloud: 2
   "lead": 2
   "senior": 2
+
+# Skill match % --------------------------------------------------
+# For each job: of the technologies it mentions, what percent are in `skills` above.
+# Example: a job mentions Azure, AKS, Terraform and AWS -> 3 of 4 are yours -> 75%.
+min_skill_match: 75    # percent; jobs below this are hidden. 0 turns the filter off.
+
+# Technologies you do NOT list as skills. They only count toward a job's total
+# (the "other skills it asks for" column); add or remove freely.
+other_tech:
+  - aws
+  - eks
+  - ecs
+  - lambda
+  - cloudformation
+  - cdk
+  - gcp
+  - "google cloud"
+  - gke
+  - openshift
+  - pulumi
+  - chef
+  - puppet
+  - java
+  - "spring boot"
+  - ".net"
+  - "c#"
+  - "node.js"
+  - react
+  - angular
+  - golang
+  - kafka
+  - spark
+  - databricks
+  - snowflake
+  - hadoop
+  - mongodb
+  - elasticsearch
+  - datadog
+  - "new relic"
+  - dynatrace
+  - cloudwatch
+  - vmware
+  - salesforce
+  - sap
 
 # Jobs whose title contains any of these are dropped.
 exclude_title:

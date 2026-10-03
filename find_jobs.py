@@ -55,53 +55,63 @@ def fetch_jsearch(cfg: dict) -> list[dict]:
     headers = {"X-RapidAPI-Key": key, "X-RapidAPI-Host": "jsearch.p.rapidapi.com"}
     jobs: list[dict] = []
 
-    # one call per query; locations are folded into the query text to save quota
+    # locations are folded into the query text to save quota.
+    # Each call returns at most 10 jobs; pages_per_query > 1 follows the API's
+    # cursor to fetch more, and every extra page costs one more API call.
     loc_text = " or ".join(cfg.get("locations", []))
+    pages = max(1, min(int(cfg.get("pages_per_query", 1)), 10))
     for q in cfg["queries"]:
         query = f"{q} in {loc_text}" if loc_text else q
-        params = {
-            "query": query,
-            "num_pages": "1",
-            "country": cfg.get("country", "in"),
-            "date_posted": date_posted,
-        }
-        try:
-            r = requests.get(JSEARCH_URL, headers=headers, params=params, timeout=TIMEOUT)
-        except Exception as e:  # network error: keep going with the next query
-            log(f"JSearch: query '{query}' failed: {e}")
-            continue
-        if not r.ok:
-            # log the API's own message (never the key) so failures are easy to diagnose
-            body = re.sub(r"\s+", " ", r.text or "")[:300]
-            if r.status_code == 404 and "no " in body.lower() and "found" in body.lower():
-                log(f"JSearch: '{query}' -> 0 jobs (API says: {body})")
-            else:
-                log(f"JSearch: query '{query}' failed: HTTP {r.status_code}: {body}")
-            continue
-        try:
-            payload = r.json().get("data") or []
-        except ValueError as e:
-            log(f"JSearch: query '{query}' returned invalid JSON: {e}")
-            continue
-        # JSearch v5 returns {"data": {"jobs": [...]}}; older versions returned {"data": [...]}
-        data = payload.get("jobs", []) if isinstance(payload, dict) else payload
-        data = data or []
+        cursor = ""
+        for page in range(1, pages + 1):
+            params = {
+                "query": query,
+                "num_pages": "1",
+                "country": cfg.get("country", "in"),
+                "date_posted": date_posted,
+            }
+            if cursor:
+                params["cursor"] = cursor
+            label = f"'{query}'" + (f" page {page}" if pages > 1 else "")
+            try:
+                r = requests.get(JSEARCH_URL, headers=headers, params=params, timeout=TIMEOUT)
+            except Exception as e:  # network error: keep going with the next query
+                log(f"JSearch: {label} failed: {e}")
+                break
+            if not r.ok:
+                # log the API's own message (never the key) so failures are easy to diagnose
+                body = re.sub(r"\s+", " ", r.text or "")[:300]
+                if r.status_code == 404 and "no " in body.lower() and "found" in body.lower():
+                    log(f"JSearch: {label} -> 0 jobs (API says: {body})")
+                else:
+                    log(f"JSearch: {label} failed: HTTP {r.status_code}: {body}")
+                break
+            try:
+                payload = r.json().get("data") or []
+            except ValueError as e:
+                log(f"JSearch: {label} returned invalid JSON: {e}")
+                break
+            # JSearch v5 returns {"data": {"jobs": [...], "cursor": ...}}; older versions returned {"data": [...]}
+            data = (payload.get("jobs", []) if isinstance(payload, dict) else payload) or []
+            cursor = str(payload.get("cursor") or "") if isinstance(payload, dict) else ""
 
-        log(f"JSearch: '{query}' -> {len(data)} jobs")
-        for j in data:
-            city = ", ".join(x for x in [j.get("job_city"), j.get("job_state")] if x)
-            where = city or j.get("job_location") or ("Remote" if j.get("job_is_remote") else "")
-            jobs.append({
-                "id": f"jsearch:{j.get('job_id')}",
-                "title": j.get("job_title") or "",
-                "company": j.get("employer_name") or "",
-                "location": where,
-                "remote": bool(j.get("job_is_remote")),
-                "url": j.get("job_apply_link") or j.get("job_google_link") or "",
-                "source": j.get("job_publisher") or "JSearch",
-                "posted": j.get("job_posted_at_datetime_utc") or "",
-                "description": j.get("job_description") or "",
-            })
+            log(f"JSearch: {label} -> {len(data)} jobs")
+            for j in data:
+                city = ", ".join(x for x in [j.get("job_city"), j.get("job_state")] if x)
+                where = city or j.get("job_location") or ("Remote" if j.get("job_is_remote") else "")
+                jobs.append({
+                    "id": f"jsearch:{j.get('job_id')}",
+                    "title": j.get("job_title") or "",
+                    "company": j.get("employer_name") or "",
+                    "location": where,
+                    "remote": bool(j.get("job_is_remote")),
+                    "url": j.get("job_apply_link") or j.get("job_google_link") or "",
+                    "source": j.get("job_publisher") or "JSearch",
+                    "posted": j.get("job_posted_at_datetime_utc") or "",
+                    "description": j.get("job_description") or "",
+                })
+            if len(data) < 10 or not cursor:  # last page
+                break
     return jobs
 
 
@@ -167,6 +177,18 @@ def fingerprint(job: dict) -> str:
     """Same job posted on several boards -> same fingerprint."""
     key = f"{norm(job['title'])}|{norm(job['company'])}"
     return hashlib.sha1(key.encode()).hexdigest()[:16]
+
+
+def skill_match(title: str, desc: str, hits: list[str], cfg: dict) -> tuple[int, list[str]]:
+    """Of the technologies the job mentions, what percent are in your skills list.
+
+    A job's technologies = your skills it mentions (hits) + `other_tech` terms it mentions.
+    Returns (percent, other_tech_found). A job that mentions no known technology scores 0.
+    """
+    others = [t for t in (cfg.get("other_tech") or [])
+              if contains(title, t) or contains(desc, t)]
+    total = len(hits) + len(others)
+    return (round(100 * len(hits) / total) if total else 0), others
 
 
 def score_job(job: dict, cfg: dict) -> tuple[int, list[str]] | None:
@@ -285,7 +307,8 @@ def build_report(jobs: list[dict], stats: dict, today: str) -> str:
     lines = [f"# Job matches for {today}", ""]
     lines.append(
         f"Fetched **{stats['fetched']}** posts, **{stats['new']}** new, "
-        f"**{len(jobs)}** match your profile."
+        f"**{len(jobs)}** match your profile "
+        f"(at least {stats.get('min_skill_match', 0)}% of the skills each job asks for)."
     )
     lines.append("")
     if not jobs:
@@ -293,18 +316,20 @@ def build_report(jobs: list[dict], stats: dict, today: str) -> str:
         return "\n".join(lines) + "\n"
 
     has_ai = any("ai_fit" in j for j in jobs)
-    header = "| # | Score | Role | Company | Location | Source | Matched skills |"
-    sep = "|---|---|---|---|---|---|---|"
+    header = "| # | Apply | Role | Company | Location | Source | Match % | Score | Your skills it asks for | Other skills it asks for |"
+    sep = "|---|---|---|---|---|---|---|---|---|---|"
     if has_ai:
         header += " AI fit | Why |"
         sep += "---|---|"
     lines += [header, sep]
     for n, j in enumerate(jobs, 1):
         # <...> keeps URLs with spaces or parentheses from breaking the link
+        apply = f"[**Apply**](<{j['url']}>)" if j["url"] else "-"
         role = f"[{md_escape(j['title'])}](<{j['url']}>)" if j["url"] else md_escape(j["title"])
-        row = (f"| {n} | {j['score']} | {role} | {md_escape(j['company'])} | "
+        row = (f"| {n} | {apply} | {role} | {md_escape(j['company'])} | "
                f"{md_escape(j['location']) or '-'} | {md_escape(j['source'])} | "
-               f"{', '.join(j['hits'][:6])} |")
+               f"{j.get('match_pct', 0)}% | {j['score']} | {', '.join(j['hits'][:8])} | "
+               f"{', '.join(j.get('missing', [])[:6]) or '-'} |")
         if has_ai:
             fit = j.get("ai_fit")
             row += f" {fit if fit is not None else '-'} | {md_escape(j.get('ai_why', ''))} |"
@@ -346,22 +371,23 @@ def main() -> int:
         if res is None:
             continue
         j["score"], j["hits"] = res
-        if j["score"] >= cfg.get("min_score", 0):
+        j["match_pct"], j["missing"] = skill_match(norm(j["title"]), norm(j["description"]), j["hits"], cfg)
+        if j["score"] >= cfg.get("min_score", 0) and j["match_pct"] >= cfg.get("min_skill_match", 0):
             matched.append(j)
 
-    matched.sort(key=lambda j: j["score"], reverse=True)
+    matched.sort(key=lambda j: (j["match_pct"], j["score"]), reverse=True)
     matched = matched[: int(cfg.get("max_results", 30))]
 
     ai_rerank(matched, cfg)
     if any("ai_fit" in j for j in matched):
-        matched.sort(key=lambda j: (j.get("ai_fit") or 0, j["score"]), reverse=True)
+        matched.sort(key=lambda j: (j.get("ai_fit") or 0, j["match_pct"], j["score"]), reverse=True)
 
     # mark everything fetched as seen (even non-matches) so we don't re-score it tomorrow
     for fp in by_fp:
         seen.setdefault(fp, now_iso)
     save_seen(seen)
 
-    stats = {"fetched": len(raw), "new": len(new_jobs)}
+    stats = {"fetched": len(raw), "new": len(new_jobs), "min_skill_match": cfg.get("min_skill_match", 0)}
     report = build_report(matched, stats, today)
     REPORT_DIR.mkdir(exist_ok=True)
     (REPORT_DIR / f"{today}.md").write_text(report)

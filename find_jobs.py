@@ -67,10 +67,21 @@ def fetch_jsearch(cfg: dict) -> list[dict]:
         try:
             r = requests.get("https://jsearch.p.rapidapi.com/search",
                              headers=headers, params=params, timeout=TIMEOUT)
-            r.raise_for_status()
-            data = r.json().get("data", []) or []
-        except Exception as e:  # keep going if one query fails
+        except Exception as e:  # network error: keep going with the next query
             log(f"JSearch: query '{query}' failed: {e}")
+            continue
+        if not r.ok:
+            # log the API's own message (never the key) so failures are easy to diagnose
+            body = re.sub(r"\s+", " ", r.text or "")[:300]
+            if r.status_code == 404 and "no " in body.lower() and "found" in body.lower():
+                log(f"JSearch: '{query}' -> 0 jobs (API says: {body})")
+            else:
+                log(f"JSearch: query '{query}' failed: HTTP {r.status_code}: {body}")
+            continue
+        try:
+            data = r.json().get("data", []) or []
+        except ValueError as e:
+            log(f"JSearch: query '{query}' returned invalid JSON: {e}")
             continue
 
         log(f"JSearch: '{query}' -> {len(data)} jobs")

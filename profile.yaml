@@ -13,8 +13,8 @@ queries:
   - "Platform Engineer"
   - "Azure Cloud Architect"          # also finds Cloud Architect / Cloud Infrastructure Architect
   - "Kubernetes Administrator"
-# Quota: JSearch free plan = 200 calls a month. 7 queries x 1 call, Monday-Saturday
-# (see .github/workflows/daily-jobs.yml) = about 182 calls a month.
+# Quota: JSearch free plan = 200 calls a month. 7 queries x 1 call, every 2 days
+# (see .github/workflows/daily-jobs.yml) = about 112 calls a month.
 
 # Only show jobs listed on these job sites (matched against the job's publisher and
 # its other apply links; the Apply link points to that site). Remove the list to allow all sites.

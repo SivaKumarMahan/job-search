@@ -1,6 +1,6 @@
 # Daily Job Finder
 
-A GitHub Actions workflow that runs at 08:00 IST, Monday to Saturday. It pulls
+A GitHub Actions workflow that runs at 08:00 IST every 2 days. It pulls
 Azure DevOps / Cloud / SRE / Platform job posts from the last 3 days, scores them against
 `profile.yaml`, skips jobs it has already shown you, and posts the ranked list
 as a GitHub Issue. GitHub then emails you the Issue.
@@ -68,7 +68,7 @@ list under "Below your filters", with the reason.
 ## How many jobs per run
 
 - JSearch returns at most **10 jobs per call**. With 7 queries that is up to **70 jobs a run** before filtering.
-- Quota: the free JSearch plan allows 200 calls a month. 7 queries, Monday to Saturday, is about 182.
+- Quota: the free JSearch plan allows 200 calls a month. 7 queries every 2 days is about 112, leaving room for manual runs.
 - `pages_per_query: 2` fetches up to 20 per query, but doubles the calls (over the free plan).
 - The report lists at most `max_results` jobs (30 by default).
 
